@@ -1,0 +1,205 @@
+# values for ecom-api.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: artifactory-new-93bf8f5a14c88dd6.elb.eu-west-2.amazonaws.com:8082/images.ecom.non-prod
+  app_name: ecom-api
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "62bb2b2"
+
+imagePullSecrets:
+  - name: articred
+
+nameOverride: "ecom-api-dev"
+fullnameOverride: "ecom-api-dev"
+
+appConfigDir: "app_config"
+binary: "app_config/binary"
+
+ports:
+  - name: http
+    containerPort: 8080
+    protocol: TCP
+appLables:
+  app.kubernetes.io/project: UKT-DEV
+  app.kubernetes.io/component: backend
+  app.kubernetes.io/framework: java
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: false
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations:
+    vault.hashicorp.com/agent-inject: 'true'
+    vault.hashicorp.com/role: 'gbx-dev'
+    vault.hashicorp.com/namespace: 'dev'
+    vault.hashicorp.com/agent-inject-secret-config: 'gbx/data/ecom/ecom-api'
+    vault.hashicorp.com/tls-skip-verify: 'true'
+    vault.hashicorp.com/agent-pre-populate-only: "true"
+    vault.hashicorp.com/agent-inject-perms-config: "0674"
+    vault.hashicorp.com/agent-inject-template-config: |
+      {{ with secret "gbx/ecom/ecom-api" -}}
+          {{- range $key, $value := .Data.data }}
+          export {{ $key }}="{{ $value }}"
+          {{- end }}
+      {{- end }}
+
+arguments: ['"-c", "source /vault/secrets/config && npm run start:prod"']
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+volumeMounts:
+  - mountPath: /assets/google-pay/signkey
+    name: googlepay-signkey
+    readOnly: true
+  - mountPath: /assets/google-pay/privatekey
+    name: googlepay-private-key
+    readOnly: true
+  - mountPath: /assets/apple-pay/privatekey
+    name: applepay-private-key
+    readOnly: true
+  - mountPath: /assets/apple-pay/identity-cert
+    name: applepay-merchant-identity-cert
+    readOnly: true
+  - mountPath: /assets/op-banks
+    name: op-banks-banks-list
+    readOnly: true
+    
+volumes:
+  - name: googlepay-signkey
+    configMap:
+      name: ecom-api-dev
+      items:
+      - key: signing-keys.json 
+        path: signing-keys.json   
+  - name: googlepay-private-key
+    configMap:
+      name: ecom-api-dev
+      items:
+      - key: gpay-privatekey.pem  
+        path: gpay-privatekey.pem  
+  - name: applepay-private-key
+    configMap:
+      name: ecom-api-dev
+      items:
+      - key: apay-privatekey.pem
+        path: apay-privatekey.pem   
+  - name: applepay-merchant-identity-cert
+    configMap:
+      name: ecom-api-dev
+      items:
+      - key: merchant-identity.crt
+        path: merchant-identity.crt
+  - name: op-banks-banks-list
+    configMap:
+      name: ecom-api-dev
+      items:
+      - key: banks-list.json 
+        path: banks-list.json 
+  
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+ #type: NodePort
+  port: 80
+ # nodePort: 30206
+ # protocol: TCP
+
+ingress:
+  enabled: true
+  annotations: 
+    alb.ingress.kubernetes.io/group.name: ecom
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+    alb.ingress.kubernetes.io/subnets: subnet-01d7018dc07d51544, subnet-016dbcb35aafff0d3
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+  className: "alb"
+  hosts:
+    - host: ecom-api.dev.int.npvficloud.net
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+#lifecycle: 
+#  preStop:
+#    exec:
+#      command: ["/bin/sh","-c","sleep 10"]
+  
+#terminationGracePeriodSeconds
+#terminationGracePeriodSeconds: 60
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+probes:
+  livenessProbe: 
+    httpGet:
+      path: /api/v2/health
+      port: http
+    initialDelaySeconds: 35
+  readinessProbe:
+    httpGet:
+        path: /api/v2/health
+        port: http
+    initialDelaySeconds: 30
+
+#podDisruptionBudge  
+#podDisruptionBudget:
+#  enabled: false
+#  minAvailable: 1 
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: 
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - ecom-api
+        topologyKey: topology.kubernetes.io/zone
+      weight: 100
