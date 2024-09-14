@@ -1,0 +1,3 @@
+@Library('deployment-shared-lib@dev') _
+// gbx_mp_k8s_with_vault_eks()
+mp_test_eks()

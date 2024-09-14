@@ -1,0 +1,213 @@
+# Default values for vfrms.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: artifactory.vficloud.net/images.dev/mp
+  app_name: vfrms
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "3.fb2738f"
+
+imagePullSecrets: 
+  - name: articred
+nameOverride: "vfrms-dev"
+fullnameOverride: "vfrms-dev"
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+appLables:
+  app.kubernetes.io/project: UKT-DEV
+  app.kubernetes.io/component: backend
+  app.kubernetes.io/framework: java
+
+# vault pod inject config
+podAnnotations:
+    vault.hashicorp.com/agent-inject: 'true'
+    vault.hashicorp.com/role: 'gbx-dev'
+    vault.hashicorp.com/namespace: 'dev'
+    vault.hashicorp.com/agent-inject-secret-config: 'gbx/data/mp/vfrms'
+    vault.hashicorp.com/agent-inject-template-config: |
+      {{ with secret "gbx/mp/vfrms" -}}
+          {{- range $key, $value := .Data.data }}
+          export {{ $key }}="{{ $value }}"
+          {{- end }}        
+      {{- end }}
+    vault.hashicorp.com/tls-skip-verify: 'true'
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: 
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 8080
+
+appConfigDir: "app_config"
+# Override Arguments
+args: ['"source /vault/secrets/config && java -Xms512m -Xmx2048m -jar  -Dspring.config.location=/etc/vcs/vfrms/vfrms/vfrms-override.properties,classpath:/application.properties vfrms.jar"']
+#Probes
+probes:
+  livenessProbe: 
+    httpGet:
+      path: /actuator/health
+      port: http
+    initialDelaySeconds: 120
+  readinessProbe:
+    httpGet:
+        path: /actuator/health
+        port: http
+    initialDelaySeconds: 50
+# Volume Mounts   
+volumeMounts:
+  - name: vfrms-logs
+    mountPath: /var/log/vcs/GB/vfrms/
+  # config-volume is already defined in volumes of deployment
+  - name: config-volume
+    mountPath: /etc/vcs/vfrms/vfrms/vfrms-override.properties
+    subPath: vfrms-override.properties
+#Volumes    
+volumes:
+  # - name: vfrms-logs
+  #   emptyDir: {}
+  - name: vfrms-logs
+    persistentVolumeClaim:
+      claimName: vfrms
+  - name:  filebeat-config
+    configMap: 
+      name: filebeat-config-vfrms
+      items:
+        - key:  filebeat.yml
+          path: filebeat.yml
+# pvc 
+pvc:
+  enabled: true
+  name: vfrms
+  access_mode: "ReadWriteMany"
+  storageClassName: efs
+  storage: "5Gi"
+
+## PDB
+podDisruptionBudget: 
+  enabled: true
+  maxUnavailable: 25%
+
+#terminationGracePeriodSeconds
+terminationGracePeriodSeconds: 60
+#lifecycle
+lifecycle: 
+  preStop:
+    exec:
+      command: ["/bin/bash","-c","sleep 40"]
+
+extraContainers: 
+  - name: filebeat
+    image: artifactory.vficloud.net/images.automation.virtual/elastic/filebeat:7.5.0
+    imagePullPolicy: IfNotPresent
+    volumeMounts: 
+     - name: filebeat-config
+       mountPath: /usr/share/filebeat/filebeat.yml
+       subPath: filebeat.yml
+     - name: vfrms-logs
+       mountPath: /var/log/vcs/GB/vfrms/
+filebeat:
+  enabled: true
+  filebeatConfigmapName: filebeat-config-vfrms
+  filebeatConfig:
+    filebeat.yml: |
+      filebeat.inputs:
+      - type: log
+        multiline.type: pattern
+        multiline.pattern: '^([0-9]{4}-[0-9]{2}-[0-9]{2})'
+        multiline.negate: true
+        multiline.match: after
+        paths:
+          - /var/log/vcs/GB/vfrms/*.log
+        processors:
+        - add_kubernetes_metadata:
+            default_indexers.enabled: false
+            default_matchers.enabled: false
+        fields_under_root: true
+        fields:
+          type: "emea-dev-lnd-rms"
+      output:
+        logstash:
+          hosts: ["172.25.28.75:5044", "172.25.28.139:5044"]
+          loadbalance: true
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations: 
+    alb.ingress.kubernetes.io/group.name: gbx-shared
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+    alb.ingress.kubernetes.io/subnets: subnet-01d7018dc07d51544, subnet-016dbcb35aafff0d3
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+  hosts:
+    - host: rms.dev.int.npvficloud.net
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+resources: 
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  limits:
+    cpu: 1
+    memory: 2Gi
+  requests:
+    cpu: "250m"
+    memory: 500Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        targetAverageUtilization: 80 
+
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: 
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - vfrms
+        topologyKey: topology.kubernetes.io/zone
+      weight: 100
